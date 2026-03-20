@@ -9,11 +9,11 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED.svg?logo=docker&logoColor=white)](https://docker.com)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 
 ---
 
-[**The Problem**](#-the-problem) · [**How It Works**](#-how-it-works) · [**Quick Start**](#-quick-start) · [**API Reference**](#-api-reference) · [**Configuration**](#%EF%B8%8F-configuration) · [**Contributing**](#-contributing)
+[**The Problem**](#-the-problem) · [**How It Works**](#-how-it-works) · [**Demo**](#-demo) · [**Quick Start**](#-quick-start) · [**API Reference**](#-api-reference) · [**Configuration**](#%EF%B8%8F-configuration) · [**Contributing**](#-contributing)
 
 </div>
 
@@ -21,7 +21,9 @@
 
 ## 💥 The Problem
 
-GitHub periodically enforces **minimum runner version requirements** for self-hosted runners. When this happens:
+Self-hosted GitHub runners can suddenly stop working when GitHub enforces a new minimum runner version.
+
+Small teams and large organizations alike often miss these upgrade deadlines, causing **CI pipelines to fail unexpectedly** — with no code changes and no warning.
 
 ```
 ❌  Your CI pipelines fail — silently and simultaneously.
@@ -32,7 +34,19 @@ GitHub periodically enforces **minimum runner version requirements** for self-ho
 
 In 2024, GitHub had to **pause a version enforcement rollout** because thousands of self-hosted runners across organizations weren't updated in time, causing widespread CI failures.
 
-**This is a solved problem.** Runner Watchdog fixes it.
+**Runner Watchdog solves this** by automatically monitoring runner versions and performing rolling upgrades across your entire runner fleet — before enforcement deadlines hit.
+
+---
+
+## 🎯 Who Should Use This
+
+| Use Case | Description |
+| -------- | ----------- |
+| **Self-hosted runner fleets** | Teams running 5+ GitHub Actions runners on their own infrastructure |
+| **GPU / specialized runners** | Organizations using custom hardware runners that can't easily be recreated |
+| **Air-gapped / private networks** | CI systems inside private networks where manual updates are painful |
+| **Large DevOps teams** | Platform engineering teams managing runners across multiple repositories |
+| **Compliance-driven environments** | Organizations that need to prove runners are always on supported versions |
 
 ---
 
@@ -48,18 +62,12 @@ Runner Watchdog continuously monitors GitHub for new runner releases and **proac
 
 ### The Control Loop
 
-```
-┌──────────────────────────────────────────────────────────┐
-│                                                          │
-│   1. DETECT    →  Poll GitHub Releases API               │
-│   2. COMPARE   →  Check fleet versions in Redis          │
-│   3. PROVISION →  Launch new runners at latest version   │
-│   4. DRAIN     →  Wait for new runners to register       │
-│   5. REMOVE    →  Gracefully decommission old runners    │
-│   6. REPEAT    →  Every CHECK_INTERVAL_SECONDS           │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
-```
+1. **Detect** — Poll the GitHub Releases API for new `actions/runner` versions.
+2. **Compare** — Check every runner in the fleet registry against the latest release.
+3. **Provision** — Launch new runner containers at the latest version.
+4. **Drain** — Wait for the new runner to register with GitHub and start accepting jobs.
+5. **Remove** — Gracefully decommission the old runner (triggers cleanup trap → auto-deregisters from GitHub).
+6. **Repeat** — Run the cycle every `CHECK_INTERVAL_SECONDS`.
 
 ### Rolling Updates — Not Big-Bang Replacements
 
@@ -69,29 +77,91 @@ Runner Watchdog replaces runners in **configurable batches** (default: 10% of fl
 Fleet: 20 runners at v2.327.0
 Update: GitHub releases v2.329.0
 
-Cycle 1: Replace 2 runners  →  18 old + 2 new  →  CI stays up ✅
-Cycle 2: Replace 2 runners  →  16 old + 4 new  →  CI stays up ✅
-   ...
-Cycle 10: Replace 2 runners →  0 old + 20 new  →  Upgrade complete 🎉
+Cycle 1:  Replace 2 runners  →  18 old + 2 new   →  CI stays up ✅
+Cycle 2:  Replace 2 runners  →  16 old + 4 new   →  CI stays up ✅
+  ...
+Cycle 10: Replace 2 runners  →   0 old + 20 new  →  Upgrade complete 🎉
 ```
+
+---
+
+## 🖥️ Demo
+
+Here's what Runner Watchdog looks like in action:
+
+```log
+2026-03-21 00:15:00  watchdog.fleet          INFO     ──── Fleet check started (current baseline: 2.327.0) ────
+2026-03-21 00:15:01  watchdog.version        WARNING  Upgrade available: current=2.327.0 → latest=2.329.0
+2026-03-21 00:15:01  watchdog.fleet          WARNING  New runner version detected: 2.329.0
+2026-03-21 00:15:01  watchdog.version        INFO     Found 3 outdated runner(s): ['runner-2.327.0-1710900000', ...]
+2026-03-21 00:15:01  watchdog.manager        INFO     Starting rolling update: 3 outdated runner(s), batch size 1 (10%)
+2026-03-21 00:15:02  watchdog.manager        INFO     Launching runner container: runner-2.329.0-1710985501
+2026-03-21 00:15:02  watchdog.db             INFO     Registered runner runner-2.329.0-1710985501
+2026-03-21 00:15:12  watchdog.manager        INFO     Removing runner container: runner-2.327.0-1710900000
+2026-03-21 00:15:13  watchdog.db             INFO     Removed runner runner-2.327.0-1710900000 from registry
+2026-03-21 00:15:13  watchdog.manager        INFO     Replaced runner-2.327.0-1710900000 → runner-2.329.0-1710985501
+2026-03-21 00:15:13  watchdog.manager        INFO     Rolling update complete: {'total_outdated': 3, 'launched': 1, 'removed': 1, 'failed': 0}
+```
+
+**API status check:**
+
+```bash
+$ curl -s -H "X-API-Key: $WATCHDOG_API_KEY" http://localhost:8000/status | python -m json.tool
+```
+
+```json
+{
+    "total_runners": 20,
+    "baseline_version": "2.327.0",
+    "latest_version": "2.329.0",
+    "upgrade_available": true,
+    "version_distribution": {
+        "2.327.0": 16,
+        "2.329.0": 4
+    }
+}
+```
+
+---
+
+## 📋 Requirements
+
+| Requirement | Version |
+| ----------- | ------- |
+| **Docker** | 20.10+ |
+| **Docker Compose** | v2.0+ |
+| **Python** | 3.11+ (runs inside container) |
+| **GitHub PAT** | Scopes: `repo`, `workflow`, `admin:org` |
+
+> **Note:** You don't need Python installed locally — the controller runs inside a Docker container. You only need Docker.
 
 ---
 
 ## 🚀 Quick Start
 
-### Prerequisites
-
-- Docker & Docker Compose
-- A [GitHub Personal Access Token](https://github.com/settings/tokens) with `repo`, `workflow`, and `admin:org` scopes
-
 ### 1. Clone & Configure
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/runner-watchdog.git
-cd runner-watchdog
+git clone https://github.com/aaronmsabu/Runner-watchDog.git
+cd Runner-watchDog
 
 cp .env.example .env
-# Edit .env → add your GITHUB_TOKEN, REPO_URL, WATCHDOG_API_KEY, and REDIS_PASSWORD
+```
+
+Edit `.env` and fill in your values:
+
+```bash
+# Required — generate a token at https://github.com/settings/tokens
+GITHUB_TOKEN=ghp_your_token_here
+
+# Required — your target repository
+REPO_URL=https://github.com/your-org/your-repo
+
+# Required — generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+WATCHDOG_API_KEY=your_api_key_here
+
+# Required — change from default
+REDIS_PASSWORD=a_strong_password_here
 ```
 
 ### 2. Build the Runner Image
@@ -150,21 +220,6 @@ All endpoints except `/health` require an `X-API-Key` header.
 | `POST` | `/check-update`    | Yes  | Trigger a manual version check           |
 | `POST` | `/trigger-update`  | Yes  | Trigger a manual rolling update          |
 
-**Example — fleet status:**
-
-```json
-{
-  "total_runners": 20,
-  "baseline_version": "2.327.0",
-  "latest_version": "2.329.0",
-  "upgrade_available": true,
-  "version_distribution": {
-    "2.327.0": 16,
-    "2.329.0": 4
-  }
-}
-```
-
 ---
 
 ## ⚙️ Configuration
@@ -191,7 +246,7 @@ All settings via environment variables (`.env` file):
 ```
 runner-watchdog/
 ├── controller/
-│   ├── api.py                # FastAPI REST API
+│   ├── api.py                # FastAPI REST API (with auth middleware)
 │   ├── config.py             # Centralized env-var config
 │   ├── github_api.py         # GitHub API client
 │   ├── main.py               # Fleet controller + watchdog loop
@@ -233,18 +288,24 @@ runner-watchdog/
 - [ ] 🏢 Organization-level runner management
 - [ ] ☁️ Cloud provider support (EC2, GCE auto-scaling groups)
 - [ ] 🧪 Canary deployments — test new runner versions on a subset first
+- [ ] ♻️ Ephemeral runner support — one-shot containers per job
+- [ ] ☸️ Kubernetes runner orchestration
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, code style guidelines, and PR workflow.
+
+Whether it's a bug report, feature request, documentation improvement, or code contribution — we appreciate it.
 
 ---
 
 ## 📄 License
 
-[Apache 2.0](LICENSE) — built by [Aaron M Sabu](https://github.com/YOUR_USERNAME).
+This project is licensed under the [Apache License 2.0](LICENSE).
+
+Built by [Aaron M Sabu](https://github.com/aaronmsabu).
 
 ---
 
