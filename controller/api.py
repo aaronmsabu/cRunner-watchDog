@@ -3,17 +3,22 @@ FastAPI control API for the Runner Watchdog.
 
 Endpoints let you inspect fleet state, check for updates, and manually
 trigger rolling replacements.
+
+All routes except /health require API key authentication via the
+X-API-Key header.
 """
 
 import logging
+import secrets
 import threading
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, Security
 from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader
 
-from controller.config import RUNNER_VERSION
+from controller.config import RUNNER_VERSION, WATCHDOG_API_KEY
 from controller.github_api import get_latest_runner_version, get_repo_runners
 from controller.main import fleet_controller, run_watchdog
 from controller.runner_manager import rolling_update
@@ -21,6 +26,33 @@ from controller.version_checker import check_for_upgrade, get_outdated_runners
 from database.redis_client import get_all_runners
 
 logger = logging.getLogger("watchdog.api")
+
+
+# ── API Key authentication ──────────────────────────────────────────────────
+
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def _verify_api_key(
+    api_key: str | None = Security(_api_key_header),
+) -> str:
+    """
+    Validate the X-API-Key header against the configured WATCHDOG_API_KEY.
+
+    Uses constant-time comparison to prevent timing attacks.
+    """
+    if not WATCHDOG_API_KEY:
+        # If no key is configured, reject all requests (fail-closed)
+        logger.error("WATCHDOG_API_KEY is not set — rejecting request")
+        raise HTTPException(status_code=503, detail="API key not configured on server")
+
+    if api_key is None:
+        raise HTTPException(status_code=401, detail="Missing X-API-Key header")
+
+    if not secrets.compare_digest(api_key, WATCHDOG_API_KEY):
+        raise HTTPException(status_code=403, detail="Invalid API key")
+
+    return api_key
 
 
 # ── Lifespan: start the background watchdog loop ────────────────────────────
@@ -42,22 +74,24 @@ app = FastAPI(
 )
 
 
-# ── Endpoints ────────────────────────────────────────────────────────────────
+# ── Public endpoints (no auth) ──────────────────────────────────────────────
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    """Liveness check."""
+    """Liveness check — no authentication required."""
     return {"status": "ok"}
 
 
-@app.get("/runners")
+# ── Protected endpoints (require X-API-Key) ─────────────────────────────────
+
+@app.get("/runners", dependencies=[Depends(_verify_api_key)])
 async def list_runners() -> dict[str, Any]:
     """List all runners from the local registry."""
     runners = get_all_runners()
     return {"count": len(runners), "runners": runners}
 
 
-@app.get("/runners/github")
+@app.get("/runners/github", dependencies=[Depends(_verify_api_key)])
 async def list_github_runners() -> dict[str, Any]:
     """List runners registered on GitHub for the configured repo."""
     try:
@@ -67,7 +101,7 @@ async def list_github_runners() -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@app.get("/version/latest")
+@app.get("/version/latest", dependencies=[Depends(_verify_api_key)])
 async def latest_version() -> dict[str, str]:
     """Fetch the latest runner version from GitHub."""
     try:
@@ -77,7 +111,7 @@ async def latest_version() -> dict[str, str]:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@app.get("/status")
+@app.get("/status", dependencies=[Depends(_verify_api_key)])
 async def fleet_status() -> dict[str, Any]:
     """Fleet status summary: counts by version and upgrade availability."""
     runners = get_all_runners()
@@ -101,7 +135,7 @@ async def fleet_status() -> dict[str, Any]:
     }
 
 
-@app.post("/check-update")
+@app.post("/check-update", dependencies=[Depends(_verify_api_key)])
 async def trigger_check() -> dict[str, Any]:
     """Manually trigger a version check."""
     try:
@@ -115,7 +149,7 @@ async def trigger_check() -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@app.post("/trigger-update")
+@app.post("/trigger-update", dependencies=[Depends(_verify_api_key)])
 async def trigger_update() -> JSONResponse:
     """Manually trigger a rolling update if an upgrade is available."""
     try:

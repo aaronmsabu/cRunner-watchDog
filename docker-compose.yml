@@ -1,13 +1,36 @@
-version: "3.8"
-
 services:
   # ── Redis: runner registry store ──────────────────────────────────────────
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-changeme}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    # No external port exposure — only reachable within the Compose network
     volumes:
       - redis-data:/data
+    restart: unless-stopped
+
+  # ── Docker Socket Proxy: scoped access to Docker API ──────────────────────
+  # Instead of mounting the raw Docker socket into the controller, route
+  # through a proxy that only permits the specific API endpoints needed.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    environment:
+      # Only allow container lifecycle operations — deny everything else
+      CONTAINERS: 1        # list, inspect, create, start, stop, remove
+      POST: 1              # allow POST (needed for create/start/stop)
+      IMAGES: 0
+      NETWORKS: 0
+      VOLUMES: 0
+      SERVICES: 0
+      NODES: 0
+      BUILD: 0
+      EXEC: 0
+      SWARM: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
 
   # ── Controller: watchdog API + background loop ────────────────────────────
@@ -20,11 +43,10 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-    volumes:
-      # Mount Docker socket so the controller can launch/stop runner containers
-      - /var/run/docker.sock:/var/run/docker.sock
+      - DOCKER_HOST=tcp://docker-proxy:2375
     depends_on:
       - redis
+      - docker-proxy
     restart: unless-stopped
 
 volumes:

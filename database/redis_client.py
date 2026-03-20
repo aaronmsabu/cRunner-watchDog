@@ -10,13 +10,18 @@ from typing import Any, Optional
 
 import redis
 
-from controller.config import REDIS_HOST, REDIS_PORT
+from controller.config import REDIS_HOST, REDIS_PORT, REDIS_PASSWORD
 
 logger = logging.getLogger("watchdog.db")
 
 RUNNER_KEY_PREFIX = "runner:"
 
-_pool = redis.ConnectionPool(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+_pool = redis.ConnectionPool(
+    host=REDIS_HOST,
+    port=REDIS_PORT,
+    password=REDIS_PASSWORD or None,
+    decode_responses=True,
+)
 
 
 def _client() -> redis.Redis:

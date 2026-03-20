@@ -13,9 +13,13 @@ load_dotenv()
 GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
 REPO_URL: str = os.getenv("REPO_URL", "")  # e.g. https://github.com/org/repo
 
+# ── API security ─────────────────────────────────────────────────────────────
+WATCHDOG_API_KEY: str = os.getenv("WATCHDOG_API_KEY", "")
+
 # ── Redis ────────────────────────────────────────────────────────────────────
 REDIS_HOST: str = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")
 
 # ── Runner defaults ─────────────────────────────────────────────────────────
 RUNNER_VERSION: str = os.getenv("RUNNER_VERSION", "2.329.0")

@@ -15,8 +15,17 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Create non-root user for the controller process
+RUN groupadd --gid 1000 appuser && \
+    useradd --uid 1000 --gid appuser --shell /bin/bash appuser
+
 COPY controller/ controller/
 COPY database/    database/
+
+# Fix ownership
+RUN chown -R appuser:appuser /app
+
+USER appuser
 
 EXPOSE 8000
 
