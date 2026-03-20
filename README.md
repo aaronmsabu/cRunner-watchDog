@@ -142,8 +142,8 @@ $ curl -s -H "X-API-Key: $WATCHDOG_API_KEY" http://localhost:8000/status | pytho
 ### 1. Clone & Configure
 
 ```bash
-git clone https://github.com/aaronmsabu/Runner-watchDog.git
-cd Runner-watchDog
+git clone https://github.com/aaronmsabu/runner-watchdog.git
+cd runner-watchdog
 
 cp .env.example .env
 ```

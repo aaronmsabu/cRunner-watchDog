@@ -8,7 +8,7 @@ First off — **thank you** for considering contributing! Runner Watchdog is an 
 
 ```bash
 # 1. Fork and clone
-git clone https://github.com/<your-username>/runner-watchdog.git
+git clone https://github.com/aaronmsabu/runner-watchdog.git
 cd runner-watchdog
 
 # 2. Create a feature branch
