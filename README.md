@@ -1,52 +1,100 @@
+<div align="center">
+
 # 🐕 Runner Watchdog
 
-**Automated fleet controller for self-hosted GitHub Actions runners.**
+### Automated Fleet Controller for GitHub Self-Hosted Runners
 
-Detects upcoming runner version enforcement, tracks runner versions across your fleet, and automatically replaces outdated runners using rolling updates — zero CI downtime.
+*Never lose a CI pipeline to a runner version enforcement again.*
 
----
-
-## Architecture
-
-```
-                GitHub API
-                     │
-            Version Monitor Service
-                     │
-               Runner Registry
-                  (Redis)
-                     │
-              Fleet Controller
-                     │
-         ┌───────────┴───────────┐
-         │                       │
-   Runner Provisioner      Runner Remover
-         │                       │
-      Docker Engine         GitHub Runner API
-```
-
-**Three core services:**
-
-| Service              | Description                                                   |
-| -------------------- | ------------------------------------------------------------- |
-| Version Monitor      | Polls GitHub releases for `actions/runner` to detect upgrades |
-| Runner Registry      | Redis-backed store of all managed runner metadata             |
-| Fleet Controller     | Orchestrates rolling replacement of outdated runners          |
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED.svg?logo=docker&logoColor=white)](https://docker.com)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 
 ---
 
-## Quick Start
+[**The Problem**](#-the-problem) · [**How It Works**](#-how-it-works) · [**Quick Start**](#-quick-start) · [**API Reference**](#-api-reference) · [**Configuration**](#%EF%B8%8F-configuration) · [**Contributing**](#-contributing)
 
-### 1. Clone & configure
+</div>
+
+---
+
+## 💥 The Problem
+
+GitHub periodically enforces **minimum runner version requirements** for self-hosted runners. When this happens:
+
+```
+❌  Your CI pipelines fail — silently and simultaneously.
+❌  Engineers scramble to figure out why builds are broken.
+❌  Ops teams manually SSH into machines to upgrade runners.
+❌  Deployments are blocked. Hotfixes can't ship. Revenue is at risk.
+```
+
+In 2024, GitHub had to **pause a version enforcement rollout** because thousands of self-hosted runners across organizations weren't updated in time, causing widespread CI failures.
+
+**This is a solved problem.** Runner Watchdog fixes it.
+
+---
+
+## 🧠 How It Works
+
+Runner Watchdog continuously monitors GitHub for new runner releases and **proactively replaces outdated runners** before enforcement deadlines — with zero CI downtime.
+
+<div align="center">
+
+<img src="architecture.png" alt="Runner Watchdog Architecture" width="700" />
+
+</div>
+
+### The Control Loop
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                                                          │
+│   1. DETECT    →  Poll GitHub Releases API               │
+│   2. COMPARE   →  Check fleet versions in Redis          │
+│   3. PROVISION →  Launch new runners at latest version   │
+│   4. DRAIN     →  Wait for new runners to register       │
+│   5. REMOVE    →  Gracefully decommission old runners    │
+│   6. REPEAT    →  Every CHECK_INTERVAL_SECONDS           │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Rolling Updates — Not Big-Bang Replacements
+
+Runner Watchdog replaces runners in **configurable batches** (default: 10% of fleet per cycle) to ensure CI capacity is never fully interrupted:
+
+```
+Fleet: 20 runners at v2.327.0
+Update: GitHub releases v2.329.0
+
+Cycle 1: Replace 2 runners  →  18 old + 2 new  →  CI stays up ✅
+Cycle 2: Replace 2 runners  →  16 old + 4 new  →  CI stays up ✅
+   ...
+Cycle 10: Replace 2 runners →  0 old + 20 new  →  Upgrade complete 🎉
+```
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Docker & Docker Compose
+- A [GitHub Personal Access Token](https://github.com/settings/tokens) with `repo`, `workflow`, and `admin:org` scopes
+
+### 1. Clone & Configure
 
 ```bash
-git clone <your-repo-url> runner-watchdog
+git clone https://github.com/YOUR_USERNAME/runner-watchdog.git
 cd runner-watchdog
+
 cp .env.example .env
-# Edit .env with your GITHUB_TOKEN and REPO_URL
+# Edit .env → add your GITHUB_TOKEN and REPO_URL
 ```
 
-### 2. Build the runner image
+### 2. Build the Runner Image
 
 ```bash
 docker build \
@@ -55,103 +103,145 @@ docker build \
   docker/runner-image/
 ```
 
-### 3. Start the stack
+### 3. Launch the Stack
 
 ```bash
 docker compose up --build
 ```
 
 This starts:
-- **Redis** on port `6379`
-- **Controller API** on port `8000`
-- **Background watchdog** loop (checks every `CHECK_INTERVAL_SECONDS`)
+
+| Service        | Port   | Purpose                                    |
+| -------------- | ------ | ------------------------------------------ |
+| **Redis**      | `6379` | Runner metadata registry                   |
+| **Controller** | `8000` | REST API + background watchdog loop        |
 
 ### 4. Verify
 
 ```bash
 # Health check
 curl http://localhost:8000/health
+# → {"status": "ok"}
 
-# Latest runner version
+# Check latest runner version
 curl http://localhost:8000/version/latest
+# → {"latest_version": "2.329.0"}
 
-# Fleet status
+# Fleet status overview
 curl http://localhost:8000/status
 ```
 
 ---
 
-## API Endpoints
+## 📡 API Reference
 
-| Method | Path               | Description                              |
+Runner Watchdog exposes a REST API for fleet inspection and manual control:
+
+| Method | Endpoint           | Description                              |
 | ------ | ------------------ | ---------------------------------------- |
-| GET    | `/health`          | Liveness check                           |
-| GET    | `/runners`         | List all runners from local registry     |
-| GET    | `/runners/github`  | List runners registered on GitHub        |
-| GET    | `/version/latest`  | Fetch latest runner version from GitHub  |
-| GET    | `/status`          | Fleet summary (counts, upgrade status)   |
-| POST   | `/check-update`    | Manually trigger a version check         |
-| POST   | `/trigger-update`  | Manually trigger a rolling update        |
+| `GET`  | `/health`          | Liveness probe                           |
+| `GET`  | `/runners`         | List all runners from local registry     |
+| `GET`  | `/runners/github`  | List runners registered on GitHub        |
+| `GET`  | `/version/latest`  | Fetch latest runner version from GitHub  |
+| `GET`  | `/status`          | Fleet summary — version distribution, upgrade availability |
+| `POST` | `/check-update`    | Trigger a manual version check           |
+| `POST` | `/trigger-update`  | Trigger a manual rolling update          |
+
+**Example — fleet status:**
+
+```json
+{
+  "total_runners": 20,
+  "baseline_version": "2.327.0",
+  "latest_version": "2.329.0",
+  "upgrade_available": true,
+  "version_distribution": {
+    "2.327.0": 16,
+    "2.329.0": 4
+  }
+}
+```
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
-All settings are controlled via environment variables (`.env` file):
+All settings via environment variables (`.env` file):
 
-| Variable                 | Default          | Description                              |
-| ------------------------ | ---------------- | ---------------------------------------- |
-| `GITHUB_TOKEN`           | —                | GitHub PAT (repo, workflow, admin:org)   |
-| `REPO_URL`               | —                | Target repo for runner registration      |
-| `REDIS_HOST`             | `redis`          | Redis hostname                           |
-| `REDIS_PORT`             | `6379`           | Redis port                               |
-| `RUNNER_VERSION`         | `2.329.0`        | Current baseline runner version          |
-| `RUNNER_IMAGE_NAME`      | `github-runner-image` | Docker image name for runners       |
-| `UPDATE_BATCH_PERCENT`   | `10`             | % of fleet to replace per rolling cycle  |
-| `CHECK_INTERVAL_SECONDS` | `3600`           | How often the watchdog checks (seconds)  |
+| Variable                 | Default              | Description                              |
+| ------------------------ | -------------------- | ---------------------------------------- |
+| `GITHUB_TOKEN`           | *required*           | GitHub PAT (`repo`, `workflow`, `admin:org`) |
+| `REPO_URL`               | *required*           | Target repository for runner registration |
+| `REDIS_HOST`             | `redis`              | Redis hostname                           |
+| `REDIS_PORT`             | `6379`               | Redis port                               |
+| `RUNNER_VERSION`         | `2.329.0`            | Current baseline runner version          |
+| `RUNNER_IMAGE_NAME`      | `github-runner-image`| Docker image name for runners            |
+| `UPDATE_BATCH_PERCENT`   | `10`                 | % of fleet to replace per rolling cycle  |
+| `CHECK_INTERVAL_SECONDS` | `3600`               | Watchdog polling interval (seconds)      |
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 runner-watchdog/
 ├── controller/
-│   ├── api.py              # FastAPI control API
-│   ├── config.py           # Centralized configuration
-│   ├── github_api.py       # GitHub API client
-│   ├── main.py             # Fleet controller + watchdog loop
-│   ├── runner_manager.py   # Provisioning, removal, rolling updates
-│   └── version_checker.py  # Version comparison logic
+│   ├── api.py                # FastAPI REST API
+│   ├── config.py             # Centralized env-var config
+│   ├── github_api.py         # GitHub API client
+│   ├── main.py               # Fleet controller + watchdog loop
+│   ├── runner_manager.py     # Provisioning, removal, rolling updates
+│   └── version_checker.py    # Version comparison logic
 ├── database/
-│   └── redis_client.py     # Redis runner registry
+│   └── redis_client.py       # Redis runner registry (CRUD)
 ├── docker/
 │   └── runner-image/
-│       ├── Dockerfile       # Self-hosted runner image
-│       └── start.sh         # Runner entrypoint with cleanup trap
-├── Dockerfile               # Controller service image
-├── docker-compose.yml       # Full stack orchestration
+│       ├── Dockerfile         # Self-hosted runner container image
+│       └── start.sh           # Entrypoint with auto-deregistration trap
+├── Dockerfile                 # Controller service image
+├── docker-compose.yml         # Full stack orchestration
 ├── requirements.txt
-└── .env.example
+├── LICENSE
+├── CONTRIBUTING.md
+└── architecture.png
 ```
 
 ---
 
-## How Rolling Updates Work
+## 🔐 Security
 
-1. Watchdog detects a new runner version on GitHub
-2. Identifies all runners in the registry running an older version
-3. Calculates batch size (`UPDATE_BATCH_PERCENT` of total fleet)
-4. For each batch:
-   - Launch a new runner container at the latest version
-   - Wait for it to register with GitHub
-   - Gracefully stop the old runner (triggers cleanup trap → deregisters from GitHub)
-5. Repeat until all runners are upgraded
-
-**Result:** CI pipelines continue running throughout — no outage.
+- Runner containers execute as a **non-root user**
+- Runner tokens are **short-lived registration tokens** (not PATs)
+- Cleanup traps **automatically deregister** runners on shutdown — no ghost runners
+- Docker socket is mounted read-write; run the controller in a **trusted environment**
 
 ---
 
-## License
+## 🗺️ Roadmap
 
-MIT
+- [ ] 📊 Web dashboard — real-time fleet visibility
+- [ ] 🔔 Slack / Teams notifications on upgrade events
+- [ ] 📈 Runner health monitoring (CPU, memory, job load)
+- [ ] 🏢 Organization-level runner management
+- [ ] ☁️ Cloud provider support (EC2, GCE auto-scaling groups)
+- [ ] 🧪 Canary deployments — test new runner versions on a subset first
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+---
+
+## 📄 License
+
+[MIT](LICENSE) — built by [Aaron Sabu](https://github.com/YOUR_USERNAME).
+
+---
+
+<div align="center">
+
+**Runner Watchdog** — Because CI infrastructure should manage itself.
+
+</div>
