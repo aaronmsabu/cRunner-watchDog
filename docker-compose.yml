@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  # ── Redis: runner registry store ──────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  # ── Controller: watchdog API + background loop ────────────────────────────
+  controller:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      # Mount Docker socket so the controller can launch/stop runner containers
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+volumes:
+  redis-data:
